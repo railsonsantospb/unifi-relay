@@ -1,0 +1,18 @@
+services:
+  unifi-relay:
+    build: ./unifi-relay
+    container_name: unifi-relay
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      DATA_DIR: "/data"
+      RELAY_SHARED_SECRET: "${RELAY_SHARED_SECRET}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+    volumes:
+      - unifi_relay_data:/data
+    ports:
+      - "5000:5000"
+
+volumes:
+  unifi_relay_data:
