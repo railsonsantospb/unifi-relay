@@ -22,6 +22,7 @@ type Payload = {
     mode: string;
     hash: string;
     devices: Device[];
+    omada_devices?: Device[];
 };
 
 function requireEnv() {
@@ -75,14 +76,31 @@ function formatReport(p: Payload): string {
     const online = p.devices.filter(d => d.online).length;
     const total = p.devices.length;
 
-    const lines = p.devices.map(d => `- ${d.name}: ${d.online ? "🟢 ONLINE" : "🔴 OFFLINE"}`);
-    return [
-        `📶 UniFi Devices (${p.site})`,
+    const unifiLines = p.devices.map(d => `- ${d.name}: ${d.online ? "🟢 ONLINE" : "🔴 OFFLINE"}`);
+
+    const parts = [
+        `📶 UniFi APs (${p.site})`,
         `🔧 Modo API: ${p.mode}`,
         `📊 Online: ${online}/${total}`,
         ``,
-        ...lines,
-    ].join("\n");
+        ...unifiLines,
+    ];
+
+    if (p.omada_devices && p.omada_devices.length > 0) {
+        const omadaOnline = p.omada_devices.filter(d => d.online).length;
+        const omadaTotal = p.omada_devices.length;
+        const omadaLines = p.omada_devices.map(d => `- ${d.name}: ${d.online ? "🟢 ONLINE" : "🔴 OFFLINE"}`);
+
+        parts.push(
+            ``,
+            `📡 Omada APs`,
+            `📊 Online: ${omadaOnline}/${omadaTotal}`,
+            ``,
+            ...omadaLines,
+        );
+    }
+
+    return parts.join("\n");
 }
 
 const app = express();
