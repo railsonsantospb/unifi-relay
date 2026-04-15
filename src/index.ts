@@ -13,6 +13,9 @@ const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
 const DATA_DIR = (process.env.DATA_DIR || "/data").trim();
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 
+// Tempo máximo sem heartbeat antes de alertar (padrão: 3× o intervalo de 60s)
+const HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT_SECONDS || "180") * 1000;
+
 type Device = {
     name: string;
     online: boolean;
@@ -139,6 +142,32 @@ app.post("/ingest/heartbeat", async (req, res) => {
     if (!verifySignature(req.body as Buffer, sig)) {
         return res.status(401).json({ ok: false, error: "invalid_signature" });
     }
+
+    try {
+        const body = JSON.parse((req.body as Buffer).toString("utf-8"));
+        const agentId: string = body.agent_id || "unknown";
+        const agentName: string = body.agent_name || agentId;
+        const key = `heartbeat:${agentId}`;
+
+        const state = readState();
+        const wasAlerted = state[key]?.alerted === true;
+
+        state[key] = {
+            agent_name: agentName,
+            last_seen: new Date().toISOString(),
+            alerted: false,
+        };
+        writeState(state);
+
+        // Agente voltou depois de um alerta de queda
+        if (wasAlerted) {
+            const msg = `✅ Agente voltou\n🤖 ${agentName}\n🕐 ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`;
+            await tgSendMessage(msg).catch(e => console.error("[relay] tg recovery erro:", e));
+        }
+    } catch (e) {
+        console.error("[relay] heartbeat parse erro:", e);
+    }
+
     return res.json({ ok: true });
 });
 
@@ -179,5 +208,39 @@ app.post("/ingest/unifi", async (req, res) => {
     }
 });
 
+function startHeartbeatWatchdog() {
+    setInterval(async () => {
+        const state = readState();
+        const now = Date.now();
+
+        for (const key of Object.keys(state)) {
+            if (!key.startsWith("heartbeat:")) continue;
+
+            const entry = state[key];
+            const lastSeen = new Date(entry.last_seen).getTime();
+            const elapsed = now - lastSeen;
+
+            if (elapsed > HEARTBEAT_TIMEOUT_MS && !entry.alerted) {
+                const agentName: string = entry.agent_name || key;
+                const mins = Math.floor(elapsed / 60_000);
+                const msg = `⚠️ Agente offline!\n🤖 ${agentName}\n⏱ Sem sinal há ${mins} min\n🕐 Último contato: ${new Date(entry.last_seen).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`;
+
+                try {
+                    await tgSendMessage(msg);
+                    state[key].alerted = true;
+                    writeState(state);
+                    console.log(`[relay] alerta enviado: agente ${agentName} offline`);
+                } catch (e) {
+                    console.error("[relay] watchdog tg erro:", e);
+                }
+            }
+        }
+    }, 60_000); // verifica a cada 1 minuto
+}
+
 requireEnv();
-app.listen(PORT, () => console.log(`[relay] listening on :${PORT}`));
+app.listen(PORT, () => {
+    console.log(`[relay] listening on :${PORT}`);
+    console.log(`[relay] watchdog: alerta após ${HEARTBEAT_TIMEOUT_MS / 1000}s sem heartbeat`);
+    startHeartbeatWatchdog();
+});

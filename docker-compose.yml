@@ -13,6 +13,9 @@ services:
       - unifi_relay_data:/data
     ports:
       - "5000:5000"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
 
 volumes:
   unifi_relay_data:
