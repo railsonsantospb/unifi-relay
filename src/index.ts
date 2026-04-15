@@ -13,7 +13,21 @@ const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
 const DATA_DIR = (process.env.DATA_DIR || "/data").trim();
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 
-type Device = { name: string; online: boolean };
+type Device = {
+    name: string;
+    online: boolean;
+    tx_bytes?: number;   // UniFi: bytes enviados para clientes (download dos clientes)
+    rx_bytes?: number;   // UniFi: bytes recebidos dos clientes (upload dos clientes)
+    download?: number;   // Omada: bytes baixados pelos clientes
+    upload?: number;     // Omada: bytes enviados pelos clientes
+};
+
+function fmtBytes(n: number): string {
+    if (n >= 1_073_741_824) return `${(n / 1_073_741_824).toFixed(1)}GB`;
+    if (n >= 1_048_576)     return `${(n / 1_048_576).toFixed(1)}MB`;
+    if (n >= 1_024)         return `${(n / 1_024).toFixed(1)}KB`;
+    return `${n}B`;
+}
 
 type Payload = {
     type: "unifi.devices.v1";
@@ -76,7 +90,12 @@ function formatReport(p: Payload): string {
     const online = p.devices.filter(d => d.online).length;
     const total = p.devices.length;
 
-    const unifiLines = p.devices.map(d => `- ${d.name}: ${d.online ? "🟢 ONLINE" : "🔴 OFFLINE"}`);
+    const unifiLines = p.devices.map(d => {
+        const status = d.online ? "🟢" : "🔴";
+        const dl = fmtBytes(d.tx_bytes ?? 0);
+        const ul = fmtBytes(d.rx_bytes ?? 0);
+        return `${status} ${d.name}  ↓${dl} ↑${ul}`;
+    });
 
     const parts = [
         `📶 UniFi APs (${p.site})`,
@@ -89,7 +108,12 @@ function formatReport(p: Payload): string {
     if (p.omada_devices && p.omada_devices.length > 0) {
         const omadaOnline = p.omada_devices.filter(d => d.online).length;
         const omadaTotal = p.omada_devices.length;
-        const omadaLines = p.omada_devices.map(d => `- ${d.name}: ${d.online ? "🟢 ONLINE" : "🔴 OFFLINE"}`);
+        const omadaLines = p.omada_devices.map(d => {
+            const status = d.online ? "🟢" : "🔴";
+            const dl = fmtBytes(d.download ?? 0);
+            const ul = fmtBytes(d.upload ?? 0);
+            return `${status} ${d.name}  ↓${dl} ↑${ul}`;
+        });
 
         parts.push(
             ``,
@@ -109,6 +133,14 @@ const app = express();
 app.use(express.raw({ type: "application/json", limit: "256kb" }));
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
+
+app.post("/ingest/heartbeat", async (req, res) => {
+    const sig = req.header("X-Signature") || undefined;
+    if (!verifySignature(req.body as Buffer, sig)) {
+        return res.status(401).json({ ok: false, error: "invalid_signature" });
+    }
+    return res.json({ ok: true });
+});
 
 app.post("/ingest/unifi", async (req, res) => {
     try {
